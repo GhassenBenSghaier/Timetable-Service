@@ -1,10 +1,34 @@
+# server:
+#   port: 8081
+# spring:
+#   application:
+#     name: timetable-service
+#   datasource:
+#     url: jdbc:postgresql://localhost:5432/timetable_db
+#     username: postgres
+#     password: Informatique94
+#     driver-class-name: org.postgresql.Driver
+#   jpa:
+#     hibernate:
+#       ddl-auto: update
+#     properties:
+#       hibernate:
+#         dialect: org.hibernate.dialect.PostgreSQLDialect
+# eureka:
+#   client:
+#     service-url:
+#       defaultZone: http://localhost:8761/eureka/
+#   instance:
+#     leaseRenewalIntervalInSeconds: 30
+#     leaseExpirationDurationInSeconds: 90
+
 server:
   port: 8081
 spring:
   application:
     name: timetable-service
   datasource:
-    url: jdbc:postgresql://localhost:5432/timetable_db
+    url: jdbc:postgresql://postgres-timetable:5432/timetable_db
     username: postgres
     password: Informatique94
     driver-class-name: org.postgresql.Driver
@@ -17,7 +41,10 @@ spring:
 eureka:
   client:
     service-url:
-      defaultZone: http://localhost:8761/eureka/
+      defaultZone: http://10.200.1.203:8761/eureka/
+    register-with-eureka: true
+    fetch-registry: true
   instance:
-    leaseRenewalIntervalInSeconds: 30  # Heartbeat interval (default)
-    leaseExpirationDurationInSeconds: 90  # Time before Eureka considers the instance expired (default)
+    prefer-ip-address: true
+    leaseRenewalIntervalInSeconds: 30
+    leaseExpirationDurationInSeconds: 90

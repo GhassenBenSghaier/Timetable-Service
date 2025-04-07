@@ -23,6 +23,7 @@ public class Subject {
 
     private String name;
 
+
     public Subject() {}
 
     public Subject(String name) {

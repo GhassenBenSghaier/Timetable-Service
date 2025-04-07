@@ -8,6 +8,5 @@ import tn.esprit.timetableservice.entities.Teacher;
 import java.util.List;
 
 public interface TeacherRepository extends JpaRepository<Teacher, Long> {
-    @Query("SELECT t FROM Teacher t JOIN FETCH t.subjects")
-    List<Teacher> findAllWithSubjects();
+
 }

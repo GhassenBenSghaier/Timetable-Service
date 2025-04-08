@@ -520,7 +520,7 @@ import java.util.stream.Collectors;
 public class ScheduleService {
 
 //    private static final int POPULATION_SIZE = 6000;
-    private static final int POPULATION_SIZE = 500;
+    private static final int POPULATION_SIZE = 1000;
 
 //    private static final double MUTATION_RATE = 0.2;
     private static final double MUTATION_RATE = 0.1;

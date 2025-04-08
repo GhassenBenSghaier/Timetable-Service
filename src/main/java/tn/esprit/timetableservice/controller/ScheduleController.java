@@ -11,6 +11,7 @@ import java.util.List;
 
 
 @RestController
+//@RequestMapping("/api/timetable-service")
 @RequestMapping("/timetable-service")
 //@CrossOrigin(origins = "http://localhost:4200")
 public class ScheduleController {

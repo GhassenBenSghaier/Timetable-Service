@@ -1011,7 +1011,10 @@ import java.util.stream.Collectors;
 @Service
 public class ScheduleService {
 
-    private static final int SCHEDULES_PER_CLASS = 10; // 10 slots per class
+    private static final int POPULATION_SIZE = 50;       // Reduced from 6000
+    private static final int MAX_GENERATIONS = 100;      // Reduced from 3000
+    private static final double MUTATION_RATE = 0.1;     // Lowered from 0.2
+    private static final int SCHEDULES_PER_CLASS = 10;   // Same as before
     private static final Logger logger = LoggerFactory.getLogger(ScheduleService.class);
 
     @Autowired private TeacherRepository teacherRepository;
@@ -1019,7 +1022,6 @@ public class ScheduleService {
     @Autowired private SubjectRepository subjectRepository;
     @Autowired private SchoolClassRepository schoolClassRepository;
 
-    // Generate a single timetable without genetic algorithm
     public List<List<Schedule>> runGeneticAlgorithm(int generations, int numClasses) {
         List<SchoolClass> classes = schoolClassRepository.findAll();
         if (classes.size() < numClasses) {
@@ -1027,17 +1029,80 @@ public class ScheduleService {
         }
         classes = classes.subList(0, numClasses); // Take first numClasses
 
-        List<List<Schedule>> result = new ArrayList<>();
-        for (SchoolClass schoolClass : classes) {
-            List<Schedule> classSchedule = createFeasibleScheduleForClass(schoolClass);
-            result.add(classSchedule);
+        // Initialize population
+        List<List<Schedule>> population = initializePopulation(classes);
+        long startTime = System.currentTimeMillis();
+
+        // Run genetic algorithm
+        for (int gen = 0; gen < Math.min(generations, MAX_GENERATIONS) && (System.currentTimeMillis() - startTime) < 30_000; gen++) {
+            List<List<Schedule>> newPopulation = new ArrayList<>();
+            int elitismCount = (int) (POPULATION_SIZE * 0.1); // Keep top 10%
+
+            // Elitism: Carry over best individuals
+            population.stream()
+                    .sorted(Comparator.comparingInt(this::calculateFitness).reversed())
+                    .limit(elitismCount)
+                    .forEach(newPopulation::add);
+
+            // Generate rest of population
+            Random random = new Random();
+            for (int i = elitismCount; i < POPULATION_SIZE; i++) {
+                List<Schedule> parent1 = selectParent(population);
+                List<Schedule> parent2 = selectParent(population);
+                List<Schedule> child = crossover(parent1, parent2);
+                if (random.nextDouble() < MUTATION_RATE) {
+                    mutate(child);
+                }
+                newPopulation.add(child);
+            }
+
+            population = newPopulation;
+
+            if (gen % 25 == 0) { // Log progress
+                int bestFitness = population.stream()
+                        .mapToInt(this::calculateFitness)
+                        .max()
+                        .orElse(0);
+                logger.info("Generation {}: Best Fitness = {}", gen, bestFitness);
+            }
         }
 
-        logger.info("Generated timetable for {} classes with {} schedules each", numClasses, SCHEDULES_PER_CLASS);
+        // Select best individual
+        List<Schedule> bestIndividual = population.stream()
+                .max(Comparator.comparingInt(this::calculateFitness))
+                .orElse(Collections.emptyList());
+
+        if (bestIndividual.isEmpty()) {
+            logger.error("No valid schedule generated.");
+            return Collections.emptyList();
+        }
+
+        // Group by class
+        Map<Long, List<Schedule>> classSchedules = bestIndividual.stream()
+                .collect(Collectors.groupingBy(s -> s.getSchoolClass().getId()));
+        List<List<Schedule>> result = new ArrayList<>(Collections.nCopies(classes.size(), null));
+        for (SchoolClass schoolClass : classes) {
+            int index = classes.indexOf(schoolClass);
+            result.set(index, classSchedules.getOrDefault(schoolClass.getId(), Collections.emptyList()));
+        }
+
+        logger.info("Best fitness score: {}", calculateFitness(bestIndividual));
         return result;
     }
 
-    private List<Schedule> createFeasibleScheduleForClass(SchoolClass schoolClass) {
+    private List<List<Schedule>> initializePopulation(List<SchoolClass> classes) {
+        List<List<Schedule>> population = new ArrayList<>();
+        for (int i = 0; i < POPULATION_SIZE; i++) {
+            List<Schedule> individual = new ArrayList<>();
+            for (SchoolClass schoolClass : classes) {
+                individual.addAll(createRandomScheduleForClass(schoolClass));
+            }
+            population.add(individual);
+        }
+        return population;
+    }
+
+    private List<Schedule> createRandomScheduleForClass(SchoolClass schoolClass) {
         List<Schedule> schedule = new ArrayList<>();
         List<Teacher> teachers = teacherRepository.findAll();
         List<Classroom> classrooms = classroomRepository.findAll();
@@ -1051,62 +1116,88 @@ public class ScheduleService {
 
         Random random = new Random();
         List<Subject> subjectsToSchedule = getSubjectsForSpecialty(schoolClass.getSpecialty(), subjects);
-        // Ensure we have enough subjects (repeat if needed)
         while (subjectsToSchedule.size() < SCHEDULES_PER_CLASS) {
             subjectsToSchedule.addAll(subjectsToSchedule);
         }
         subjectsToSchedule = subjectsToSchedule.subList(0, SCHEDULES_PER_CLASS);
 
-        Map<String, Set<String>> scheduledTimes = new HashMap<>(); // Track class time slots
-        Map<String, Set<Long>> teacherSlots = new HashMap<>();    // Track teacher availability
-        Map<String, Set<Long>> classroomSlots = new HashMap<>();  // Track classroom availability
-
+        Map<String, Set<String>> scheduledTimes = new HashMap<>();
         for (Subject subject : subjectsToSchedule) {
-            String subjectName = subject.getName();
             List<Teacher> eligibleTeachers = teachers.stream()
                     .filter(t -> t.getSubjects().contains(subject))
                     .collect(Collectors.toList());
-            if (eligibleTeachers.isEmpty()) {
-                logger.warn("No teacher available for subject: {}", subjectName);
-                continue;
-            }
+            if (eligibleTeachers.isEmpty()) continue;
 
-            for (int attempt = 0; attempt < 50; attempt++) {
+            for (int attempt = 0; attempt < 20; attempt++) {
                 String day = days.get(random.nextInt(days.size()));
                 String timeSlot = timeSlots.get(random.nextInt(timeSlots.size()));
                 String timeKey = day + "-" + timeSlot;
 
-                // Check if class is free
-                scheduledTimes.computeIfAbsent(timeKey, k -> new HashSet<>());
-                if (!scheduledTimes.get(timeKey).isEmpty()) continue;
-
-                // Check teacher availability
-                Teacher teacher = eligibleTeachers.get(random.nextInt(eligibleTeachers.size()));
-                teacherSlots.computeIfAbsent(timeKey, k -> new HashSet<>());
-                if (teacherSlots.get(timeKey).contains(teacher.getId())) continue;
-
-                // Check classroom availability
-                Classroom classroom = classrooms.stream()
-                        .filter(c -> !classroomSlots.getOrDefault(timeKey, new HashSet<>()).contains(c.getId()))
-                        .findFirst()
-                        .orElse(null);
-                if (classroom == null) continue;
-
-                // All checks passed, add schedule
-                Schedule newSchedule = new Schedule(teacher, classroom, subject, schoolClass, day, timeSlot);
-                schedule.add(newSchedule);
-                scheduledTimes.get(timeKey).add(schoolClass.getName());
-                teacherSlots.get(timeKey).add(teacher.getId());
-                classroomSlots.computeIfAbsent(timeKey, k -> new HashSet<>()).add(classroom.getId());
-                break;
+                if (scheduledTimes.getOrDefault(timeKey, new HashSet<>()).isEmpty()) {
+                    Teacher teacher = eligibleTeachers.get(random.nextInt(eligibleTeachers.size()));
+                    Classroom classroom = classrooms.get(random.nextInt(classrooms.size()));
+                    Schedule newSchedule = new Schedule(teacher, classroom, subject, schoolClass, day, timeSlot);
+                    schedule.add(newSchedule);
+                    scheduledTimes.computeIfAbsent(timeKey, k -> new HashSet<>()).add(schoolClass.getName());
+                    break;
+                }
             }
         }
-
-        if (schedule.size() < SCHEDULES_PER_CLASS) {
-            logger.warn("Generated only {} slots for class {}, expected {}",
-                    schedule.size(), schoolClass.getName(), SCHEDULES_PER_CLASS);
-        }
         return schedule;
+    }
+
+    private int calculateFitness(List<Schedule> individual) {
+        int score = 0;
+        Map<String, Set<Long>> teacherSlots = new HashMap<>();
+        Map<String, Set<Long>> classroomSlots = new HashMap<>();
+        Map<Long, Set<String>> classTimeSlots = new HashMap<>();
+
+        for (Schedule s : individual) {
+            String timeKey = s.getDay() + "-" + s.getTimeSlot();
+            Long classId = s.getSchoolClass().getId();
+
+            // Teacher conflict
+            teacherSlots.computeIfAbsent(timeKey, k -> new HashSet<>());
+            if (!teacherSlots.get(timeKey).add(s.getTeacher().getId())) score -= 50;
+            else score += 10;
+
+            // Classroom conflict
+            classroomSlots.computeIfAbsent(timeKey, k -> new HashSet<>());
+            if (!classroomSlots.get(timeKey).add(s.getClassroom().getId())) score -= 50;
+            else score += 10;
+
+            // Class overlap
+            classTimeSlots.computeIfAbsent(classId, k -> new HashSet<>());
+            if (!classTimeSlots.get(classId).add(timeKey)) score -= 100;
+            else score += 20;
+        }
+
+        return score;
+    }
+
+    private List<Schedule> selectParent(List<List<Schedule>> population) {
+        Random random = new Random();
+        return population.get(random.nextInt(population.size())); // Simple random selection
+    }
+
+    private List<Schedule> crossover(List<Schedule> parent1, List<Schedule> parent2) {
+        if (parent1 == null || parent2 == null) return new ArrayList<>();
+        Random random = new Random();
+        List<Schedule> child = new ArrayList<>();
+        for (int i = 0; i < parent1.size(); i++) {
+            child.add(random.nextBoolean() ? parent1.get(i) : parent2.get(i));
+        }
+        return child;
+    }
+
+    private void mutate(List<Schedule> schedule) {
+        if (schedule.isEmpty()) return;
+        Random random = new Random();
+        Schedule toMutate = schedule.get(random.nextInt(schedule.size()));
+        List<String> days = Arrays.asList("Monday", "Tuesday", "Wednesday", "Thursday", "Friday");
+        List<String> timeSlots = Arrays.asList("08:00 - 10:00", "10:00 - 12:00", "14:00 - 16:00", "16:00 - 18:00");
+        toMutate.setDay(days.get(random.nextInt(days.size())));
+        toMutate.setTimeSlot(timeSlots.get(random.nextInt(timeSlots.size())));
     }
 
     private List<Subject> getSubjectsForSpecialty(String specialty, List<Subject> allSubjects) {
